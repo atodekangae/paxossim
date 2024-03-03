@@ -73,8 +73,9 @@ def proposer(ident, acceptors, num_proposers, value_given):
                 yield send(c, Prepare(e_external))
             deadline = None
             promised = set()
-            value_to_propose_epoch = -1
+            value_to_propose_epoch = None
             value_to_propose = None
+            epoch_max = None
             while True:
                 if deadline is None:
                     deadline = (yield get_epoch()) + 100
@@ -89,7 +90,7 @@ def proposer(ident, acceptors, num_proposers, value_given):
                     continue
                 if isinstance(msg, Promise):
                     promised.add(sender)
-                    if msg.epoch_accepted is not None:
+                    if msg.epoch_accepted is not None and (epoch_max is None or msg.epoch_accepted > epoch_max):
                         value_to_propose = msg.value_accepted
                         value_to_propose_epoch = msg.epoch_accepted
                     if len(promised) >= len(set(acceptors)) // 2 + 1:
@@ -100,6 +101,8 @@ def proposer(ident, acceptors, num_proposers, value_given):
         if value_to_propose_epoch is None:
             value_to_propose_epoch = e_external
             value_to_propose = value_given
+            if value_to_propose is None:
+                raise RuntimeError()
         acceptors_reordered = list(acceptors)
         random.shuffle(acceptors_reordered)
         for p in acceptors_reordered: # for p in promised:
@@ -125,7 +128,7 @@ def proposer(ident, acceptors, num_proposers, value_given):
                 if len(accepted) >= len(set(acceptors)) // 2 + 1:
                     attempting = False
                     break
-            else:
+            else:  # ignore other messages; at this point Promise could be received
                 continue
     print(f'{ident}: reached consensus for epoch {e_external}')
     yield consensus_reached(e_external)
@@ -151,6 +154,8 @@ def acceptor(ident):
                 epoch_accepted = msg.epoch
                 value_accepted = msg.value
                 yield send(sender, Accept(msg.epoch))
+            else:
+                yield send(sender, NoAccept(msg.epoch))
 
 @dataclass(frozen=True)
 class Receiving:
@@ -166,7 +171,7 @@ class Ready:
 class Done:
     at: int
 
-def execute():
+def execute(order=None):
     processes = {
         0: Ready(proposer(ident=0, acceptors={3, 4, 5}, num_proposers=3, value_given='a'), None),
         1: Ready(proposer(ident=1, acceptors={3, 4, 5}, num_proposers=3, value_given='b'), None),
@@ -179,6 +184,7 @@ def execute():
     channels = {k: [] for k in processes.keys()}
     acceptances = defaultdict(set)  # epoch -> acceptors
     proposer_beliefs_on_consensus = {}
+    order = order or []
     while True:
         epoch += 1
         if len([v for v in processes.values() if isinstance(v, Done)]) == 3:
@@ -199,7 +205,10 @@ def execute():
         if len(processes_with_incoming_msg|timedout_processes|ready_processes) == 0:
             continue
         candidates = list(processes_with_incoming_msg | timedout_processes | ready_processes)
-        idx = random.choice(candidates)
+        if order:
+            idx = order.pop(0)
+        else:
+            idx = random.choice(candidates)
         proc = processes[idx]
         # print(f'{epoch}: processing proc #{idx}')
         if isinstance(proc, Receiving):
@@ -213,10 +222,7 @@ def execute():
             while True:
                 proc = processes[idx]
                 # print(f'returning value {proc.next_value} to proc #{idx}')
-                if proc.next_value is None:
-                    value = next(proc.gen)
-                else:
-                    value = proc.gen.send(proc.next_value)
+                value = proc.gen.send(proc.next_value)
                 if isinstance(value, send):
                     channels[value.to].append((idx, value.value))
                     print(f'{epoch}: {idx} sending to {value.to}: {value.value}')
@@ -241,6 +247,7 @@ def execute():
             raise TypeError(f'could not recognize: {value!r}')
 
 def main():
+    # execute([0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 0, 0, 3, 3, 4, 4])
     execute()
 
 if __name__ == '__main__':
