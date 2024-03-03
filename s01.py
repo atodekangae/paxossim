@@ -67,7 +67,9 @@ def proposer(ident, acceptors, num_proposers, value_given):
         while preparing:
             e = yield get_epoch()
             e_external = to_external_epoch(e)
-            for c in acceptors:
+            acceptors_reordered = list(acceptors)
+            random.shuffle(acceptors_reordered)
+            for c in acceptors_reordered:
                 yield send(c, Prepare(e_external))
             deadline = None
             promised = set()
@@ -90,7 +92,7 @@ def proposer(ident, acceptors, num_proposers, value_given):
                     if msg.epoch_accepted is not None:
                         value_to_propose = msg.value_accepted
                         value_to_propose_epoch = msg.epoch_accepted
-                    if promised == set(acceptors):
+                    if len(promised) >= len(set(acceptors)) // 2 + 1:
                         preparing = False
                         break
                 else:
@@ -98,7 +100,9 @@ def proposer(ident, acceptors, num_proposers, value_given):
         if value_to_propose_epoch is None:
             value_to_propose_epoch = e_external
             value_to_propose = value_given
-        for p in promised:
+        acceptors_reordered = list(acceptors)
+        random.shuffle(acceptors_reordered)
+        for p in acceptors_reordered: # for p in promised:
             yield send(p, Propose(e_external, value_to_propose))
         deadline = None
         accepted = set()
@@ -118,11 +122,11 @@ def proposer(ident, acceptors, num_proposers, value_given):
                 if sender not in acceptors:
                     raise RuntimeError()
                 accepted.add(sender)
-                if accepted == set(acceptors):
+                if len(accepted) >= len(set(acceptors)) // 2 + 1:
                     attempting = False
                     break
             else:
-                break
+                continue
     print(f'{ident}: reached consensus for epoch {e_external}')
     yield consensus_reached(e_external)
 
@@ -175,7 +179,7 @@ def execute():
     channels = {k: [] for k in processes.keys()}
     acceptances = defaultdict(set)  # epoch -> acceptors
     proposer_beliefs_on_consensus = {}
-    while epoch < 1000:
+    while True:
         epoch += 1
         if len([v for v in processes.values() if isinstance(v, Done)]) == 3:
             print('All proposers think consensus has been reached')
@@ -186,18 +190,18 @@ def execute():
         processes_with_incoming_msg = {k for k, v in processes.items() if isinstance(v, Receiving) and len(channels[k]) > 0}
         timedout_processes = {k for k, v in processes.items() if isinstance(v, Receiving) and v.deadline > epoch}
         ready_processes = {k for k, v in processes.items() if isinstance(v, Ready)}
-        print('processes_with_incoming_msg:')
-        pprint.pprint(processes_with_incoming_msg)
-        print('timedout_processes:')
-        pprint.pprint(timedout_processes)
-        print('ready_processes:')
-        pprint.pprint(ready_processes)
+        # print('processes_with_incoming_msg:')
+        # pprint.pprint(processes_with_incoming_msg)
+        # print('timedout_processes:')
+        # pprint.pprint(timedout_processes)
+        # print('ready_processes:')
+        # pprint.pprint(ready_processes)
         if len(processes_with_incoming_msg|timedout_processes|ready_processes) == 0:
             continue
         candidates = list(processes_with_incoming_msg | timedout_processes | ready_processes)
         idx = random.choice(candidates)
         proc = processes[idx]
-        print(f'{epoch}: processing proc #{idx}')
+        # print(f'{epoch}: processing proc #{idx}')
         if isinstance(proc, Receiving):
             if len(channels[idx]) != 0:
                 value = channels[idx].pop(0)
